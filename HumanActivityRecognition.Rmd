@@ -1,0 +1,151 @@
+---
+title: "Human Activity Recognition"
+author: "Maria Lee-Salisbury"
+date: "Wednesday, May 20, 2015"
+output: html_document
+---
+
+## Executive Summary
+This study will attempt to analyze data from accelerometers, such as Jawbone Up, Nike FuelBand, and Fitbit, to determine how well certain exercises were performed by six participants.  This paper will introduce a predictive model that will predict the manner in which the participant performed the exercise.  These are known as "classe".  The model will then be tested against a test data set to determine how well it accurately performs.  The data for this study comes from the following source:  http://groupware.les.inf.puc-rio.br/har.
+
+## 1.  Retrieve, Load, and Clean Data
+This section is about the retrieval, initial loading, and cleaning of the data.
+
+#### 1a.  Download and Extract Data
+```{r}
+if (!file.exists("./PracticalMachineLearning/Project")) {
+        dir.create("./PracticalMachineLearning/Project")
+}
+
+trainingFile <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(trainingFile, destfile = "./PracticalMachineLearning/Project/pml-training.csv")
+
+testFile <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(testFile, destfile = "./PracticalMachineLearning/Project/pml-testing.csv")
+
+## Read Data into Table
+trainingData <- read.csv("./PracticalMachineLearning/Project/pml-training.csv", na.strings = c(""," ","NA"))
+testingData <- read.csv("./PracticalMachineLearning/Project/pml-testing.csv", na.strings = c(""," ","NA"))    
+```
+
+#### 1b.  Data Cleaning
+Examining the data, we notice that a majority of the columns have NA values.  To create an accurate predictive model, we will remove columns where the number of NA values are greater than the number of non-NA values.  
+__Justification:__  Because columns containing a majority of NA values do not serve as good predictor variables and may skew the accuracy of a model, it is better to remove them entirely.
+   
+```{r}
+## Remove columns with more NAs than non-NAs from data set
+cleanTrainingData <- trainingData[ ,colSums(!is.na(trainingData)) > colSums(is.na(trainingData))]
+```
+
+
+## 2.  Cross-Validation Process
+Cross-validation is the process by which multiple models are created, their quality assessed, and then the model with the best fit is selected.  The model with the best fit, or highest measure of predictive quality, will be the model used to test the independent Test data set downloaded separately.  The steps for the cross-validation process are as follows below:
+
+#### 2a.  Data Splitting:  Create Training and Test Data Set
+```{r, echo=FALSE, message=FALSE}
+require(caret)
+require(randomForest)
+```
+
+```{r}
+set.seed(3978)
+trainIndex <- createDataPartition(cleanTrainingData$classe, p=0.9, list=FALSE)
+trainingSet <- cleanTrainingData[trainIndex, ]
+testingSet <- cleanTrainingData[-trainIndex, ]
+```
+
+####  2b.  Preprocessing:  Imputation and Standardization
+Upon examining the data, we see that some columns still have NA as values.  We will use knnImpute method to perform imputation and replace remaining NA values with k nearest neighbor.  
+__Justification:__  Model assessment in cross-validation requires that there be no missing data, therefore imputation of missing values is necessary.  Use of knnImpute is because it does a better job than does the row average method or simply filling in the missing values with zeroes.
+```{r}
+## Impute and standardize training data
+i.train <- grep("classe", colnames(trainingSet))
+imputedStandardTraining <- preProcess(trainingSet[ , -c(1:7, i.train)], method="knnImpute")
+trainingSet[ , -c(1:7, i.train)] <- predict(imputedStandardTraining, trainingSet[ , -c(1:7, i.train)])
+trainingSet <- trainingSet[, -c(1, 2, 6, 7)]
+```
+
+#### 2c.  Use Imputed Values on Cross-Validation Test Set
+We will now attempt to predict on the cross-validation test set using the imputed training values.
+```{r}
+i.test <- grep("classe", colnames(testingSet))
+testingSet[ , -c(1:7, i.test)] <- predict(imputedStandardTraining, testingSet[ , -c(1:7, i.test)])
+testingSet <- testingSet[, -c(1, 2, 6, 7)]
+```
+
+####  2d.  Fit a Model
+To fit a model, we will use Random Forest.  
+
+__Justification:__  Because this is the initial run, meaning I do not know the underlying model yet, Random Forest is the best model to use to produce a first cut.  It is quite easy because its default parameter settings can run effectively and produce accurate results.  Therefore, my reasons for using Random Forest are:
+  1.  Ease of use with setting parameters
+  2.  Accuracy and variable importance generated automatically
+  3.  No need to worry about overfitting
+  4.  Not very sensitive to outliers in the training data
+  
+```{r}
+##  Model 1 - Random Forest Model
+modelFit <- randomForest(classe ~., data=trainingSet)
+saveRDS(modelFit, "RF_modelFit.rds")
+```
+
+####  2e.  Assessing Predictive Accuracy Using Out of Sample Error Rate
+Given that non-relevant predictors were removed from the training set, and a thorough imputation process, along with a standardizatin process, were utilized, I expect the out of sample error rate to be between 0.08% and 0.2%.  I do not wish it to be 0.00 because that would suggest the model is overfitting.
+
+Therefore, looking at the summary of the *modelFit* fitted model below shows that the __OOB estimate of error rate__ is actually 0.13%  This indicates that there is low variability and the accuracy is near 100%.  Furthermore, because the out of sample error rate is not 0.00, this also suggests that the model is not overfitting.  The fitted model is therefore considered effective for predicting on the cross-validation test set below.
+```{r, echo=FALSE}
+modelFit
+```
+
+####  2f.  Prediction Using Fitted Model
+According to the Confusion Matrix, the accuracy rate of *modelFit* is 99.95%, thus verifying the predictive quality of the fitted model.
+```{r}
+prediction_RF <- predict(modelFit, newdata=testingSet)
+confusionMatrix(prediction_RF, testingSet$classe)
+```
+
+#### 2g.  Random Forest Plot
+The plot below is used to show the error rates or MSE of the *modelFit* random forest.  As the number of trees used increases, the error rate inversely decreases.
+```{r}
+layout(matrix(c(1,2),nrow=1),
+       width=c(4,1)) 
+par(mar=c(5,4,4,0)) #No margin on the right side
+plot(modelFit, log="y")
+par(mar=c(5,0,4,2)) #No margin on the left side
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("top", colnames(modelFit$err.rate),col=1:4,cex=0.8,fill=1:4)
+```
+
+##  3.  Predict Using Test Data Set
+With the independent test data set (pml-testing.csv), we will now apply the fitted model onto it to make the predictions.
+
+#### 3a.  Cleaning Up Test Data Set
+```{r}
+## Remove columns with more NAs than non-NAs from data set
+cleanTestingData <- testingData[ ,colSums(!is.na(testingData)) > colSums(is.na(testingData))]
+testDS <- cleanTestingData
+
+## Impute and standardize testing data
+testDS[ , -c(1:7, i.train)] <- predict(imputedStandardTraining, testDS[ , -c(1:7, i.train)])
+testDS <- testDS[, -c(1, 2, 6, 7)]
+levels(testDS$new_window) <- levels(trainingSet$new_window)
+levels(testDS$cvtd_timestamp) <- levels(trainingSet$cvtd_timestamp)
+```
+
+#### 3b.  Predict On Test Data Set Using Fitted Model
+```{r}
+prediction <- predict(modelFit, newdata = testDS, type="class")
+```
+
+
+##  4.  Prediction Assignment Submission
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(prediction)
+```
